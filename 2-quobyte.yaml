@@ -1,0 +1,139 @@
+---
+- hosts: all
+  vars_files:
+    - vars/quobyte.yaml
+  become: true
+  tasks:
+  - name: Add EPEL repository
+    yum_repository:
+      name: epel
+      description: EPEL YUM repo
+      baseurl: https://download.fedoraproject.org/pub/epel/$releasever/$basearch/
+  - name: Install packages
+    yum:
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+      - java-1.8.0-openjdk
+      - chrony
+  - name: Download Quobyte Software for id {{ repo_id }}
+    get_url:
+      url: https://packages.quobyte.com/repo/3/{{ repo_id }}/install_quobyte
+      dest: /root/install_quobyte
+      mode: '0755'
+  - name: Install Quobyte client
+    shell:
+      cmd: /root/install_quobyte add-client --repo-id {{ repo_id }} --registry-endpoints {{ registry }} --mount-point /mnt/quobyte/mounts
+    register: command_result
+    failed_when: "'FAILED' in command_result.stderr"
+    ignore_errors: yes
+  - name: Disable SE Linux
+    shell:
+      cmd: /usr/sbin/setenforce 0
+    register: command_result2
+    failed_when: "'FAILED' in command_result2.stderr"
+    ignore_errors: yes   
+  - name: Configure quobyte client configuration
+    blockinfile:
+      path: /etc/quobyte/client-service.cfg
+      block: |
+        registry={{ registry }}
+        mount_point={{ mountpoint }}
+        options=default_permissions
+        disable-xattrs
+  - name: Set quobyte-client tuned profile
+    shell:
+      cmd: /usr/sbin/tuned-adm profile quobyte-client-performance
+- hosts: master
+  vars_files:
+    - vars/quobyte.yaml
+  tasks:
+  - name: Copy Quobyte CSI files
+    copy:
+       src: templates
+       dest: /tmp/
+  - name: Create Quobyte CSI config
+    shell:
+      cmd: kubectl create -f /tmp/templates/config.yaml
+    ignore_errors: yes
+  - name: Deploy RBAC and Kubernetes CSI helper containers along with Quobyte CSI plugin containers
+    shell:
+      cmd: kubectl create -f /tmp/templates/csi-driver.yaml
+    ignore_errors: yes
+  - pause: seconds=30
+  - name: Verify the status of Quobyte CSI driver pods
+    shell:
+      cmd: kubectl get CSIDriver | grep ^csi.quobyte.com
+    register: kubectl_result1
+  - debug:
+      var: kubectl_result1.stdout_lines
+  - name: Verify the status of Quobyte CSI driver pods
+    shell:
+      cmd: kubectl -n kube-system get po -owide | grep ^quobyte-csi
+    register: kubectl_result2
+  - debug:
+      var: kubectl_result2.stdout_lines
+  - name: Create namespace
+    shell:
+      cmd: kubectl create ns quobyte
+    ignore_errors: yes
+    register: kubectl_result3
+  - debug:
+      var: kubectl_result3.stdout_lines
+  - name: Configure authentication
+    shell:
+      cmd: kubectl create -f /tmp/templates/csi-secret.yaml
+    ignore_errors: yes
+    register: kubectl_result4
+  - debug:
+      var: kubectl_result4.stdout_lines
+  - name: Create Storage Class
+    shell:
+      cmd: kubectl create -f /tmp/templates/StorageClass.yaml
+    ignore_errors: yes
+    register: kubectl_result5
+  - debug:
+      var: kubectl_result5.stdout_lines
+  - name: Create Persistent Volume Claim
+    shell:
+      cmd: kubectl create -f /tmp/templates/pvc-dynamic-provision.yaml
+    ignore_errors: yes
+    register: kubectl_result6
+  - debug:
+      var: kubectl_result6.stdout_lines
+  - name: Mount Persistent Volume Claim
+    shell:
+      cmd: kubectl create -f /tmp/templates/nginx-demo-pod-with-dynamic-vol.yaml
+    ignore_errors: yes
+    register: kubectl_result7
+  - debug:
+      var: kubectl_result7.stdout_lines
+  - pause: seconds=10
+  - name: Show running pod
+    shell:
+      cmd: kubectl describe pod nginx-dynamic-vol 
+    ignore_errors: yes
+    register: kubectl_result7
+  - debug:
+      var: kubectl_result7.stdout_lines
+  - name: Copy the new index file to the mounted Quobyte volume
+    shell:
+      cmd: cp /tmp/templates/index.html /mnt/quobyte/mounts/pvc*
+    register: kubectl_result10
+  - debug:
+      var: kubectl_result10.stdout_lines
+  - name: Change file ownership, group and permissions
+    shell:
+      cmd: chmod 755 /mnt/quobyte/mounts/pvc-*
+    args:
+      warn: false
+  - name: Show index file
+    shell:
+      cmd: curl http://$(kubectl get pods nginx-dynamic-vol -o yaml | grep 'podIP:' | awk '{print $2}'):80
+    register: kubectl_result11
+    args:
+      warn: false
+  - debug:
+      var: kubectl_result11.stdout_lines

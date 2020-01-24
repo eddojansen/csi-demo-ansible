@@ -1,0 +1,50 @@
+---
+- hosts: master
+  tasks:
+  - name: Copy Quobyte CSI files
+    copy:
+       src: templates
+       dest: /tmp/
+  - name: Delete Quobyte CSI config
+    shell:
+      cmd: kubectl delete -f /tmp/templates/config.yaml
+    ignore_errors: yes
+  - name: Umount Persistent Volume Claim
+    shell:
+      cmd: kubectl delete -f /tmp/templates/nginx-demo-pod-with-dynamic-vol.yaml
+    ignore_errors: yes
+    register: kubectl_result7
+  - debug:
+      var: kubectl_result7.stdout_lines
+  - name: Delete Persistent Volume Claim
+    shell:
+      cmd: kubectl delete -f /tmp/templates/pvc-dynamic-provision.yaml
+    ignore_errors: yes
+    register: kubectl_result6
+  - debug:
+      var: kubectl_result6.stdout_lines
+  - name: Delete Storage Class
+    shell:
+      cmd: kubectl delete -f /tmp/templates/StorageClass.yaml
+    ignore_errors: yes
+    register: kubectl_result5
+  - debug:
+      var: kubectl_result5.stdout_lines
+  - name: Remove authentication
+    shell:
+      cmd: kubectl delete -f /tmp/templates/csi-secret.yaml
+    ignore_errors: yes
+    register: kubectl_result4
+  - debug:
+      var: kubectl_result4.stdout_lines
+  - name: Delete namespace
+    shell:
+      cmd: kubectl delete ns quobyte
+    ignore_errors: yes
+    register: kubectl_result3
+  - debug:
+      var: kubectl_result3.stdout_lines
+  - name: Delete RBAC and Kubernetes CSI helper containers along with Quobyte CSI plugin containers
+    shell:
+      cmd: kubectl delete -f /tmp/templates/csi-driver.yaml
+    ignore_errors: yes
